@@ -61,7 +61,6 @@ class MLQScheduler:
         # Loop until all processes are completed
         while True:
             # 1. Check for new arrivals
-            # We iterate backwards to remove items safely while looping
             for i in range(len(self.incoming_processes) - 1, -1, -1):
                 p = self.incoming_processes[i]
                 if p.arrival_time <= self.current_time:
@@ -70,9 +69,7 @@ class MLQScheduler:
                     print(f"[Time {self.current_time}] Process {p.pid} arrived -> Queue {p.queue_id}")
 
             # 2. Check termination condition
-            if not self.incoming_processes and \
-               sum(len(q) for q in self.queues) == 0 and \
-               self.current_process is None:
+            if not self.incoming_processes and not any(self.queues) and self.current_process is None:
                 break
 
             # 3. Determine which queue should run (Preemption Logic)
@@ -80,8 +77,10 @@ class MLQScheduler:
 
             # Logic: If a higher priority queue has processes, we must preempt
             # unless the current process is already from that high priority queue
+            # If active_q_index = -1 then no process is running
+            # Active queue is the curretly hiest priroty queue
             if self.current_process and active_q_index != -1:
-                if active_q_index < self.current_q_id:
+                if active_q_index < self.current_q_id: # higher priroty queue has task
                     # PREEMPTION HAPPENS HERE
                     print(f"[Time {self.current_time}] Preempting Process {self.current_process.pid} (Q{self.current_q_id}) for Q{active_q_index}")
                     # Put current back to head of its own queue (RR logic)
@@ -90,6 +89,7 @@ class MLQScheduler:
                     self.time_slice_counter = 0
             
             # 4. Load a process if CPU is idle
+            # If active_q_index = -1 then no process is running
             if self.current_process is None and active_q_index != -1:
                 # Get first process from the highest priority queue
                 self.current_process = self.queues[active_q_index].pop(0)

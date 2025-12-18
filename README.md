@@ -1,4 +1,4 @@
-## Prerequisites & Setup
+## 
 ```bash
 
 # A
@@ -23,3 +23,6 @@ gcc b.c -o b -lpthread -lssl -lcrypto
 
 # Run
 ./b file_path
+
+# C
+python3 ./mlq_scheduler.py
