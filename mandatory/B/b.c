@@ -1,178 +1,163 @@
+#define OPENSSL_SUPPRESS_DEPRECATED
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
-#include <openssl/md5.h> 
+#include <openssl/md5.h>
 
-#define NUM_WORKERS 8
-#define MAX_PATH 1024
-#define BUFFER_SIZE 4096 // to read files in 4KB chunks
+#define N 10  // Buffer Size 
+#define MAX_PATH 1024 
 
-typedef struct Node {
-    char filepath[MAX_PATH];
-    struct Node* next;
-} Node;
 
-Node* head = NULL;
-Node* tail = NULL;
+char buffer[N][MAX_PATH];
+int in = 0;  // Points to next free slot
+int out = 0; // Points to next filled slot
 
-pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t queue_cond = PTHREAD_COND_INITIALIZER;
-int finished_scanning = 0;
 
-// --- 2. Queue Functions (Same as before) ---
-void enqueue(const char* path) {
-    Node* new_node = malloc(sizeof(Node));
-    if (!new_node) return; // Safety check
-    strncpy(new_node->filepath, path, MAX_PATH);
-    new_node->next = NULL;
+sem_t empty;            // Counts empty slots (Initial value = N)
+sem_t full;             // Counts filled slots (Initial value = 0)
+pthread_mutex_t mutex;  // Protects the buffer indices
 
-    pthread_mutex_lock(&queue_mutex);
-    if (tail == NULL) {
-        head = new_node;
-        tail = new_node;
-    } else {
-        tail->next = new_node;
-        tail = new_node;
-    }
-    pthread_cond_signal(&queue_cond);
-    pthread_mutex_unlock(&queue_mutex);
-}
+int done = 0; // Flag to tell workers to stop
 
-char* dequeue() {
-    if (head == NULL) return NULL;
+// MD5 Helper
+void print_md5(char *filename) {
+    unsigned char c[MD5_DIGEST_LENGTH];
+    char data[1024];
+    FILE *fp = fopen(filename, "rb");
+    if (!fp) return;
     
-    Node* temp = head;
-    char* path = strdup(head->filepath);
-    head = head->next;
-    if (head == NULL) tail = NULL;
-    free(temp);
-    return path;
-}
-
-// --- 3. Compute MD5 using OpenSSL (The NEW part) ---
-void compute_md5(const char* filepath) {
-    unsigned char c[MD5_DIGEST_LENGTH]; // Buffer for the final hash (16 bytes)
-    char data[BUFFER_SIZE];             // Buffer to read file chunks
-    FILE *inFile = fopen(filepath, "rb"); // Open in Binary mode
-    MD5_CTX mdContext;                  // Structure to hold current MD5 state
+    MD5_CTX ctx;
+    MD5_Init(&ctx);
     int bytes;
 
-    if (inFile == NULL) {
-        // printf("Could not open %s\n", filepath); // Optional error printing
-        return;
+    while ((bytes = fread(data, 1, 1024, fp)) != 0) {
+        MD5_Update(&ctx, data, bytes);
     }
 
-    // Initialize the library
-    MD5_Init(&mdContext);
+    MD5_Final(c, &ctx);
+    fclose(fp);
 
-    // Read the file in chunks and feed it to the MD5 updater
-    // This is memory efficient even for huge files (GBs in size)
-    while ((bytes = fread(data, 1, BUFFER_SIZE, inFile)) != 0) {
-        MD5_Update(&mdContext, data, bytes);
-    }
-
-    // Finish calculation
-    MD5_Final(c, &mdContext);
-    fclose(inFile);
-
-    // Print filename first (as per prompt example)
-    // The prompt output format: "filename <hash>"
-    printf("%s ", filepath);
-
-    // Print the hash (convert 16 raw bytes to 32 hex characters)
-    for(int i = 0; i < MD5_DIGEST_LENGTH; i++) {
-        printf("%02x", c[i]);
-    }
+    printf("%s ", filename);
+    for (int i = 0; i < MD5_DIGEST_LENGTH; i++) printf("%02x", c[i]);
     printf("\n");
 }
 
-// --- 4. Worker Routine (Same as before) ---
-void* worker_routine(void* arg) {
+// CONSUMER
+void *consumer(void *arg) {
+    char my_file[MAX_PATH];
+    
     while (1) {
-        pthread_mutex_lock(&queue_mutex);
+        // If full <= 0 wait
+        // If not go ahead
+        sem_wait(&full);
 
-        while (head == NULL && !finished_scanning) {
-            pthread_cond_wait(&queue_cond, &queue_mutex);
+        // Critical Section
+        pthread_mutex_lock(&mutex);
+
+        // Check if we are done and buffer is empty
+        if (done && out == in) { 
+            pthread_mutex_unlock(&mutex);
+            sem_post(&full); // Wake up other sleepers so they can exit too
+            break; 
         }
 
-        if (head == NULL && finished_scanning) {
-            pthread_mutex_unlock(&queue_mutex);
-            break;
-        }
+        // Per thread copy's file name into own memory then processes them
 
-        char* file_to_process = dequeue();
-        pthread_mutex_unlock(&queue_mutex);
+        // Copy fielname to local 
+        strcpy(my_file, buffer[out]);
+        out = (out + 1) % N;
 
-        if (file_to_process != NULL) {
-            compute_md5(file_to_process);
-            free(file_to_process);
-        }
+        // EXIT Critical Section 
+        pthread_mutex_unlock(&mutex);
+
+        // Increments empty as it read 1
+        sem_post(&empty);
+
+        // Process MD5
+        print_md5(my_file);
     }
+
     return NULL;
 }
 
-// --- 5. Directory Traversal (Same as before) ---
-void process_directory(const char* base_path) {
-    struct dirent* entry;
-    DIR* dp = opendir(base_path);
+// The PRODUCER
+void producer(char *path) {
+    DIR *d = opendir(path);
+    if (!d) return;
+    
+    struct dirent *dir;
+    char fullpath[MAX_PATH];
 
-    if (dp == NULL) return;
+    while ((dir = readdir(d)) != NULL) {
+        // Skip hidden files and current dir
+        if (dir->d_name[0] == '.') continue;  
 
-    while ((entry = readdir(dp)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-            continue;
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir->d_name);
+        
+        // Copy file metadata to st
+        struct stat st;
+        stat(fullpath, &st);
 
-        char path[MAX_PATH];
-        snprintf(path, sizeof(path), "%s/%s", base_path, entry->d_name);
+        // If st is a directory
+        if (S_ISDIR(st.st_mode)) {
+            // Call itself with the directory
+            producer(fullpath); 
+        } 
+        
+        // If st is a file
+        else {
+            // Check if there is empty slot
+            // If not wait
+            // If yes decrement empty
+            sem_wait(&empty);
 
-        struct stat statbuf;
-        if (stat(path, &statbuf) == -1) continue;
+            // Critical Section
+            pthread_mutex_lock(&mutex);
+            strcpy(buffer[in], fullpath);
+            in = (in + 1) % N;
+            pthread_mutex_unlock(&mutex);
 
-        if (S_ISDIR(statbuf.st_mode)) {
-            process_directory(path);
-        } else {
-            enqueue(path);
+            // Increments full by 1
+            // To signal the consumer
+            sem_post(&full);
         }
     }
-    closedir(dp);
+
+    closedir(d);
 }
 
-// --- 6. Main (Same as before) ---
-int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        printf("USAGE: %s <directory/file> [more directories/files]\n", argv[0]);
-        return 1;
-    }
+int main(int argc, char *argv[]) {
+    if (argc < 2) return 1;
 
-    pthread_t threads[NUM_WORKERS];
+    // Initialize Synchronization Tools
+    sem_init(&empty, 0, N); // empty = 10
+    sem_init(&full, 0, 0);  // full = 0
+    pthread_mutex_init(&mutex, NULL);
 
-    for (int i = 0; i < NUM_WORKERS; i++) {
-        pthread_create(&threads[i], NULL, worker_routine, NULL);
-    }
+    // Create 8 Consumers
+    pthread_t threads[8];
+    for (int i = 0; i < 8; i++) 
+        pthread_create(&threads[i], NULL, consumer, NULL);
 
-    for (int i = 1; i < argc; i++) {
-        struct stat statbuf;
-        if (stat(argv[i], &statbuf) == 0) {
-            if (S_ISDIR(statbuf.st_mode)) {
-                process_directory(argv[i]);
-            } else {
-                enqueue(argv[i]);
-            }
-        }
-    }
+    // Run Producer (Main Thread)
+    producer(argv[1]);
 
-    pthread_mutex_lock(&queue_mutex);
-    finished_scanning = 1;
-    pthread_cond_broadcast(&queue_cond);
-    pthread_mutex_unlock(&queue_mutex);
+    // Cleanup
+    pthread_mutex_lock(&mutex);
+    done = 1;
+    pthread_mutex_unlock(&mutex);
+    
+    // Wake up everyone so they can check the 'done' flag
+    for (int i=0; i<8; i++) sem_post(&full); 
 
-    for (int i = 0; i < NUM_WORKERS; i++) {
+    for (int i = 0; i < 8; i++) 
         pthread_join(threads[i], NULL);
-    }
 
     return 0;
 }

@@ -1,18 +1,25 @@
 ## Prerequisites & Setup
-Run the following commands to install dependencies:
-
 ```bash
+
+# A
 # Update package list
 sudo apt update
 
 # Install GCC, Make, and standard build tools
 sudo apt install build-essential
 
-# Install OpenSSL library (Required for Part B)
-sudo apt install libssl-dev
-
 # Compile	
-gcc source.c -o output_name
+gcc a.c -o a
 
 # Run
-./output_name
+./a
+
+# B
+# Install OpenSSL library 
+sudo apt install libssl-dev
+
+# Compile
+gcc b.c -o b -lpthread -lssl -lcrypto
+
+# Run
+./b file_path
