@@ -1,28 +1,21 @@
 ## 
 ```bash
+# Steps to run the project
 
 # A
-# Update package list
 sudo apt update
-
-# Install GCC, Make, and standard build tools
 sudo apt install build-essential
 
-# Compile	
-gcc a.c -o a
-
-# Run
-./a
+gcc collatz.c -o output
+./output
 
 # B
-# Install OpenSSL library 
+sudo apt update
+sudo apt install build-essential
 sudo apt install libssl-dev
 
-# Compile
 gcc b.c -o b -lpthread -lssl -lcrypto
+./output file_path
 
-# Run
-./b file_path
-
-# C
+# C (Make sure python is installed)
 python3 ./mlq_scheduler.py
