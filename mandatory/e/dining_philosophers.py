@@ -15,7 +15,7 @@ class DiningServer:
     """
     def __init__(self):
         self.lock = threading.Lock() # Global lock for the monitor
-        self.state = [THINKING] * N
+        self.state = [THINKING] * N # List of states
         # One Condition Variable per philosopher to make them wait if hungry
         self.cvs = [threading.Condition(self.lock) for _ in range(N)]
 
