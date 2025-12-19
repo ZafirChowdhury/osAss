@@ -19,3 +19,6 @@ gcc b.c -o b -lpthread -lssl -lcrypto
 
 # C (Make sure python is installed)
 python3 ./mlq_scheduler.py
+
+# E (Make sure python is installed)
+python3 ./dining_philosophers.py
