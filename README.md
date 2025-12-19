@@ -14,7 +14,7 @@ sudo apt update
 sudo apt install build-essential
 sudo apt install libssl-dev
 
-gcc b.c -o b -lpthread -lssl -lcrypto
+gcc md5Hash.c -o output -lpthread -lssl -lcrypto
 ./output file_path
 
 # C (Make sure python is installed)
