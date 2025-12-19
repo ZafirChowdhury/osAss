@@ -1,5 +1,3 @@
-import sys
-
 class Process:
     def __init__(self, pid, arrival_time, burst_time, queue_id):
         self.pid = pid
